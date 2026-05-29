@@ -1,0 +1,443 @@
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { afterEach, describe, expect, it, vi } from "vitest"
+
+import { createMockTransactionsDashboardActions } from "@/modules/transactions-dashboard/commands/transactions-dashboard-actions"
+import { listMockTransactions } from "@/modules/transactions-dashboard/model/transaction/mock-transactions"
+import { TRANSACTION_STATUS, type RetryPaymentResult } from "@/modules/transactions-dashboard/model/transaction/transaction"
+import { ROW_FEEDBACK_VISIBLE_MS } from "./dashboard-feedback"
+import { TransactionsDashboardClient } from "./TransactionsDashboardClient"
+
+const ELIGIBLE_FAILED_TRANSACTION_COUNT = listMockTransactions().filter(
+  (transaction) => transaction.status === TRANSACTION_STATUS.FAILED
+).length
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolver) => {
+    resolve = resolver
+  })
+
+  return { promise, resolve }
+}
+
+function renderDashboard(ui: React.ReactElement) { return render(ui) }
+
+function renderMockDashboard() {
+  return renderDashboard(<TransactionsDashboardClient initialTransactions={listMockTransactions()} />)
+}
+
+function getSelectedSummaryCard(): HTMLElement { return screen.getByText("Selected").closest('[data-slot="card"]') as HTMLElement }
+
+async function flushAsyncWork(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
+describe("TransactionsDashboard", () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("renders the header checkbox in the Payment History table", () => {
+    renderMockDashboard()
+
+    const paymentHistoryTable = screen.getByRole("table")
+
+    expect(
+      within(paymentHistoryTable).getByRole("checkbox", {
+        name: "Select all failed transactions",
+      })
+    ).toBeVisible()
+  })
+
+  it("retries selected payments concurrently and updates each row as it resolves", async () => {
+    const user = userEvent.setup()
+    const retryById = new Map<
+      string,
+      ReturnType<typeof deferred<RetryPaymentResult>>
+    >()
+    const retryPaymentAction = vi.fn((transactionId: string) => {
+      const retry = deferred<RetryPaymentResult>()
+      retryById.set(transactionId, retry)
+      return retry.promise
+    })
+
+    renderDashboard(
+      <TransactionsDashboardClient
+        initialTransactions={listMockTransactions()}
+        actions={createMockTransactionsDashboardActions({
+          retryPayment: retryPaymentAction,
+        })}
+      />
+    )
+
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /select failed transaction TXN-2026-0039/i,
+      })
+    )
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /select failed transaction TXN-2025-0036/i,
+      })
+    )
+    await user.click(screen.getByRole("button", { name: /retry selected/i }))
+
+    expect(retryPaymentAction).toHaveBeenCalledTimes(2)
+    expect(retryPaymentAction).toHaveBeenNthCalledWith(1, "TXN-2026-0039")
+    expect(retryPaymentAction).toHaveBeenNthCalledWith(2, "TXN-2025-0036")
+
+    const firstRow = screen.getByRole("row", { name: /TXN-2026-0039/i })
+    const secondRow = screen.getByRole("row", { name: /TXN-2025-0036/i })
+
+    expect(screen.getByText("Retry started for 2 payments")).toBeVisible()
+    expect(within(firstRow).getByText("Retrying")).toBeInTheDocument()
+    expect(within(secondRow).getByText("Retrying")).toBeInTheDocument()
+
+    await act(async () => {
+      retryById.get("TXN-2026-0039")?.resolve({
+        status: TRANSACTION_STATUS.SUCCESS,
+        transactionId: "TXN-2026-0039",
+      })
+    })
+
+    await waitFor(() => {
+      expect(within(firstRow).getByText("Success")).toBeInTheDocument()
+    })
+    expect(screen.getByText("TXN-2026-0039 recovered")).toBeVisible()
+    expect(within(firstRow).getByText("Retry recovered")).toBeInTheDocument()
+    expect(within(secondRow).getByText("Retrying")).toBeInTheDocument()
+
+    await act(async () => {
+      retryById.get("TXN-2025-0036")?.resolve({
+        status: TRANSACTION_STATUS.FAILED,
+        transactionId: "TXN-2025-0036",
+      })
+    })
+
+    await waitFor(() => {
+      expect(within(secondRow).getByText("Failed")).toBeInTheDocument()
+    })
+    expect(screen.getByText("TXN-2025-0036 is still failed")).toBeVisible()
+    expect(within(secondRow).getByText("Retry failed")).toBeInTheDocument()
+  })
+
+  it("clicking the header checkbox selects all eligible failed rows", async () => {
+    const user = userEvent.setup()
+
+    renderMockDashboard()
+
+    const headerCheckbox = screen.getByRole("checkbox", {
+      name: /select all failed transactions/i,
+    })
+
+    await user.click(headerCheckbox)
+
+    expect(headerCheckbox).toBeChecked()
+    expect(
+      screen.getByRole("button", { name: /retry selected/i })
+    ).toBeEnabled()
+    expect(
+      within(getSelectedSummaryCard()).getByText(
+        String(ELIGIBLE_FAILED_TRANSACTION_COUNT)
+      )
+    ).toBeVisible()
+
+    screen
+      .getAllByRole("checkbox", { name: /select failed transaction/i })
+      .forEach((checkbox) => {
+        expect(checkbox).toBeChecked()
+      })
+  })
+
+  it("unchecking one failed row makes the header checkbox indeterminate", async () => {
+    const user = userEvent.setup()
+
+    renderMockDashboard()
+
+    const headerCheckbox = screen.getByRole("checkbox", {
+      name: /select all failed transactions/i,
+    })
+
+    await user.click(headerCheckbox)
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /select failed transaction TXN-2026-0039/i,
+      })
+    )
+
+    expect(headerCheckbox).toBePartiallyChecked()
+    expect(
+      within(getSelectedSummaryCard()).getByText(
+        String(ELIGIBLE_FAILED_TRANSACTION_COUNT - 1)
+      )
+    ).toBeVisible()
+  })
+
+  it("clicking the header checkbox again from partial state restores full eligible selection", async () => {
+    const user = userEvent.setup()
+
+    renderMockDashboard()
+
+    const headerCheckbox = screen.getByRole("checkbox", {
+      name: "Select all failed transactions",
+    })
+
+    await user.click(headerCheckbox)
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: /select failed transaction TXN-2026-0039/i,
+      })
+    )
+
+    expect(headerCheckbox).toBePartiallyChecked()
+
+    await user.click(headerCheckbox)
+
+    expect(headerCheckbox).toBeChecked()
+    expect(
+      screen.getByRole("button", { name: /retry selected/i })
+    ).toBeEnabled()
+    expect(
+      within(getSelectedSummaryCard()).getByText(
+        String(ELIGIBLE_FAILED_TRANSACTION_COUNT)
+      )
+    ).toBeVisible()
+
+    screen
+      .getAllByRole("checkbox", { name: /select failed transaction/i })
+      .forEach((checkbox) => {
+        expect(checkbox).toBeChecked()
+      })
+  })
+
+  it("only exposes sortable controls for Amount, Date and time, and Status", () => {
+    renderMockDashboard()
+
+    expect(screen.getByRole("button", { name: "Sort by amount" })).toBeVisible()
+    expect(
+      screen.getByRole("button", { name: "Sort by date and time" })
+    ).toBeVisible()
+    expect(screen.getByRole("button", { name: "Sort by status" })).toBeVisible()
+    expect(
+      screen.queryByRole("button", { name: "Sort by transaction" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Sort by payment method" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Sort by invoice" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("shows invoice generation state before downloading the dummy PDF", async () => {
+    const user = userEvent.setup()
+    const invoice = deferred<Blob>()
+    const blob = new Blob(["pdf"], { type: "application/pdf" })
+    const generateInvoiceAction = vi.fn(() => invoice.promise)
+    const downloadInvoiceAction = vi.fn()
+
+    renderDashboard(
+      <TransactionsDashboardClient
+        initialTransactions={listMockTransactions()}
+        actions={createMockTransactionsDashboardActions({
+          downloadInvoice: downloadInvoiceAction,
+          generateInvoice: generateInvoiceAction,
+        })}
+      />
+    )
+
+    const row = screen.getByRole("row", { name: /TXN-2026-0042/i })
+    const downloadButton = within(row).getByRole("button", {
+      name: /download invoice for TXN-2026-0042/i,
+    })
+
+    await user.click(downloadButton)
+
+    expect(generateInvoiceAction).toHaveBeenCalledTimes(1)
+    expect(screen.getByText("Generating invoice INV-2026-0042")).toBeVisible()
+    expect(downloadButton).toBeDisabled()
+    expect(within(row).getByText("Generating")).toBeInTheDocument()
+
+    await act(async () => {
+      invoice.resolve(blob)
+    })
+
+    await waitFor(() => {
+      expect(downloadInvoiceAction).toHaveBeenCalledWith(
+        blob,
+        "invoice-INV-2026-0042-TXN-2026-0042.pdf"
+      )
+    })
+    expect(
+      within(row).getByText("Invoice INV-2026-0042 downloaded")
+    ).toBeInTheDocument()
+    expect(screen.getAllByText("Invoice INV-2026-0042 downloaded")).toHaveLength(
+      2
+    )
+    expect(downloadButton).toBeEnabled()
+  })
+
+  it("reset clears row selection and header selection state", async () => {
+    const user = userEvent.setup()
+
+    renderMockDashboard()
+
+    const headerCheckbox = screen.getByRole("checkbox", {
+      name: "Select all failed transactions",
+    })
+
+    await user.click(headerCheckbox)
+
+    expect(headerCheckbox).toBeChecked()
+    expect(
+      screen.getByRole("button", { name: /retry selected/i })
+    ).toBeEnabled()
+
+    await user.click(screen.getByRole("button", { name: /reset/i }))
+
+    expect(headerCheckbox).not.toBeChecked()
+    expect(headerCheckbox).not.toBePartiallyChecked()
+    expect(
+      screen.getByRole("button", { name: /retry selected/i })
+    ).toBeDisabled()
+    expect(within(getSelectedSummaryCard()).getByText("0")).toBeVisible()
+
+    screen
+      .getAllByRole("checkbox", { name: /select failed transaction/i })
+      .forEach((checkbox) => {
+        expect(checkbox).not.toBeChecked()
+      })
+  })
+
+  it("clears retry row feedback after five seconds", async () => {
+    vi.useFakeTimers()
+
+    const retryPaymentAction = vi.fn(async () => ({
+      status: TRANSACTION_STATUS.SUCCESS,
+      transactionId: "TXN-2026-0039",
+    }))
+
+    renderDashboard(
+      <TransactionsDashboardClient
+        initialTransactions={listMockTransactions()}
+        actions={createMockTransactionsDashboardActions({
+          retryPayment: retryPaymentAction,
+        })}
+      />
+    )
+
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: /select failed transaction TXN-2026-0039/i,
+      })
+    )
+    fireEvent.click(screen.getByRole("button", { name: /retry selected/i }))
+    await flushAsyncWork()
+
+    const row = screen.getByRole("row", { name: /TXN-2026-0039/i })
+
+    expect(within(row).getByText("Retry recovered")).toBeInTheDocument()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ROW_FEEDBACK_VISIBLE_MS - 1)
+    })
+
+    expect(within(row).getByText("Retry recovered")).toBeInTheDocument()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+
+    expect(within(row).queryByText("Retry recovered")).not.toBeInTheDocument()
+    expect(within(row).getByText("Success")).toBeInTheDocument()
+  })
+
+  it("clears invoice row feedback after five seconds", async () => {
+    vi.useFakeTimers()
+
+    const blob = new Blob(["pdf"], { type: "application/pdf" })
+    const generateInvoiceAction = vi.fn(async () => blob)
+    const downloadInvoiceAction = vi.fn()
+
+    renderDashboard(
+      <TransactionsDashboardClient
+        initialTransactions={listMockTransactions()}
+        actions={createMockTransactionsDashboardActions({
+          downloadInvoice: downloadInvoiceAction,
+          generateInvoice: generateInvoiceAction,
+        })}
+      />
+    )
+
+    const row = screen.getByRole("row", { name: /TXN-2026-0042/i })
+
+    fireEvent.click(
+      within(row).getByRole("button", {
+        name: /download invoice for TXN-2026-0042/i,
+      })
+    )
+    await flushAsyncWork()
+
+    expect(
+      within(row).getByText("Invoice INV-2026-0042 downloaded")
+    ).toBeInTheDocument()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ROW_FEEDBACK_VISIBLE_MS)
+    })
+
+    expect(
+      within(row).queryByText("Invoice INV-2026-0042 downloaded")
+    ).not.toBeInTheDocument()
+    expect(screen.getByText("Invoice INV-2026-0042 downloaded")).toBeVisible()
+  })
+
+  it("resets transaction state and row feedback to the original mock data", async () => {
+    const user = userEvent.setup()
+    const retryPaymentAction = vi.fn(async () => ({
+      status: TRANSACTION_STATUS.SUCCESS,
+      transactionId: "TXN-2026-0039",
+    }))
+
+    renderDashboard(
+      <TransactionsDashboardClient
+        initialTransactions={listMockTransactions()}
+        actions={createMockTransactionsDashboardActions({
+          retryPayment: retryPaymentAction,
+        })}
+      />
+    )
+
+    const headerCheckbox = screen.getByRole("checkbox", {
+      name: /select all failed transactions/i,
+    })
+
+    await user.click(headerCheckbox)
+    await user.click(screen.getByRole("button", { name: /retry selected/i }))
+
+    const row = screen.getByRole("row", { name: /TXN-2026-0039/i })
+
+    await waitFor(() => {
+      expect(within(row).getByText("Success")).toBeInTheDocument()
+    })
+    expect(within(row).getByText("Retry recovered")).toBeInTheDocument()
+
+    await user.click(screen.getByRole("button", { name: /reset/i }))
+
+    await waitFor(() => {
+      expect(within(row).getByText("Failed")).toBeInTheDocument()
+    })
+    expect(headerCheckbox).not.toBeChecked()
+    expect(
+      screen.getByRole("checkbox", {
+        name: /select failed transaction TXN-2026-0039/i,
+      })
+    ).not.toBeChecked()
+    expect(within(row).queryByText("Retry recovered")).not.toBeInTheDocument()
+    expect(screen.getByText("No payment activity yet.")).toBeVisible()
+  })
+})
