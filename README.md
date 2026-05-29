@@ -1,5 +1,7 @@
 # Transactions Management Dashboard
 
+DEMO: https://transaction-control-panel-aorz.vercel.app/
+
 Mock streaming-service billing dashboard for reviewing transaction history, downloading invoices, and retrying failed payments in bulk.
 
 The assignment is intentionally small, so I treated the interesting part as product-quality execution: clear state transitions, visible per-row feedback, a polished table UI, and enough tests to make the concurrent retry behavior safe to change during an interview.
