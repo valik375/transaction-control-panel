@@ -87,6 +87,7 @@ function TransactionsDashboardClient({
                 type="button"
                 variant="outline"
                 size="sm"
+                className="cursor-pointer"
                 onClick={dashboard.handleReset}
               >
                 <RotateCcwIcon data-icon="inline-start" />
@@ -100,6 +101,7 @@ function TransactionsDashboardClient({
                     : "default"
                 }
                 size="sm"
+                className="cursor-pointer"
                 disabled={dashboard.retryableSelectedIds.length === 0}
                 onClick={dashboard.handleRetrySelected}
               >

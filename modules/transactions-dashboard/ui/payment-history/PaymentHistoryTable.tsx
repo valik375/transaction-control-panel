@@ -76,6 +76,7 @@ function PaymentHistoryTableView({
                     : false
               }
               disabled={!canSelectAnyFailed}
+              className="cursor-pointer"
               aria-label="Select all failed transactions"
               onCheckedChange={() => onToggleAllFailedSelection()}
             />
@@ -155,7 +156,7 @@ function SortableTableHead({
         type="button"
         variant="ghost"
         size="xs"
-        className="-ml-2 h-auto px-2 py-1 text-left"
+        className="-ml-2 h-auto cursor-pointer px-2 py-1 text-left"
         aria-label={`Sort by ${label.toLowerCase()}`}
         onClick={() => onToggleSort(column)}
       >

@@ -86,6 +86,7 @@ function PaymentHistoryRowView({
             type="button"
             variant="outline"
             size="sm"
+            className="cursor-pointer"
             disabled={isGeneratingInvoice}
             aria-label={`Download invoice for ${transaction.id}`}
             onClick={() => onDownloadInvoice(transaction)}
@@ -137,6 +138,7 @@ function RetrySelector({
   return (
     <Checkbox
       checked={isSelected}
+      className="cursor-pointer"
       aria-label={`Select failed transaction ${transactionId}`}
       onCheckedChange={onToggle}
     />

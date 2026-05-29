@@ -60,7 +60,7 @@ function LatestActivity({ activity }: LatestActivityProps) {
       aria-live="polite"
       className="flex min-w-0 items-center gap-2 text-sm"
     >
-      <ActivityDot tone={activity.tone} />
+      <ActivityDot tone={activity.tone} className="mt-0 self-center" />
       <div className="min-w-0 truncate">
         <span className="font-medium">Latest: </span>
         <span>{activity.title}</span>
@@ -89,6 +89,7 @@ function ActivityLogButton({
           type="button"
           variant="outline"
           size="sm"
+          className="cursor-pointer"
           aria-controls="payment-activity-log"
         >
           <HistoryIcon data-icon="inline-start" />
@@ -119,6 +120,7 @@ function ActivityLogButton({
               type="button"
               variant="ghost"
               size="icon-xs"
+              className="cursor-pointer"
               aria-label="Close activity log"
             >
               <XIcon />
@@ -153,9 +155,10 @@ function ActivityLogButton({
 
 interface ActivityDotProps {
   readonly tone: DashboardActivity["tone"]
+  readonly className?: string
 }
 
-function ActivityDot({ tone }: ActivityDotProps) {
+function ActivityDot({ tone, className }: ActivityDotProps) {
   return (
     <span
       aria-hidden="true"
@@ -163,7 +166,8 @@ function ActivityDot({ tone }: ActivityDotProps) {
         "mt-1.5 size-2 shrink-0 rounded-full",
         tone === ACTIVITY_TONE.SUCCESS && "bg-emerald-500",
         tone === ACTIVITY_TONE.DANGER && "bg-destructive",
-        tone === ACTIVITY_TONE.INFO && "bg-primary"
+        tone === ACTIVITY_TONE.INFO && "bg-primary",
+        className
       )}
     />
   )

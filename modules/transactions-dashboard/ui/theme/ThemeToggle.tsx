@@ -45,6 +45,7 @@ function ThemeToggle() {
       type="button"
       variant="outline"
       size="sm"
+      className="cursor-pointer"
       aria-label={ariaLabel}
       onClick={onToggleTheme}
     >
